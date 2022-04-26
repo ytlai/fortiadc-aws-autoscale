@@ -945,7 +945,7 @@
                     "S3Bucket": {
                         "Fn::GetAtt": [
                             "StackCopyLambda",
-                            "Outputs.LambdaZipsBucket"
+                            "Outputs.DestinationBucket"
                         ]
                     },
                     "S3Key": {
