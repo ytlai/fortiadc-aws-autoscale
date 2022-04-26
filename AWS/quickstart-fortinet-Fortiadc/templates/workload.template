@@ -281,6 +281,44 @@
         }
     },
     "Resources": {
+        "StackFindAMI": {
+            "Type": "AWS::CloudFormation::Stack",
+            "Properties": {
+                "Parameters": {
+                    "CustomIdentifier": {
+                        "Ref": "CustomIdentifier"
+                    },
+                    "CodeS3BucketName": {
+                        "Ref": "QSS3BucketName"
+                    },
+                    "ZipCodeS3Key": {
+                    	"Fn::Sub": [
+                            "${QSS3KeyPrefix}functions/packages/find_ami.zip",
+                            {
+                                "QSS3KeyPrefix": {
+                                    "Ref": "QSS3KeyPrefix"
+                                }
+                            }
+                        ] 
+                    }
+                },
+                "TemplateURL": {
+                    "Fn::Sub": [
+                        "https://${QSS3BucketName}.${QSS3Region}.amazonaws.com/${QSS3KeyPrefix}templates/find-ami.template",
+                        {
+                            "QSS3Region": {
+                                "Fn::If": [
+                                    "GovCloudCondition",
+                                    "s3-us-gov-west-1",
+                                    "s3"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "TimeoutInMinutes": "5"
+             }
+         },
         "StackCreateDynamoDBTable": {
             "Type": "AWS::CloudFormation::Stack",
             "Properties": {
@@ -621,18 +659,9 @@
                     },
                     "InstanceInitiatedShutdownBehavior": "terminate",
                     "ImageId": {
-                        "Fn::FindInMap": [
-                            "AWSAMIRegionMap",
-                            {
-                                "Ref": "AWS::Region"
-                            },
-                            {
-                                "Fn::FindInMap": [
-                                    "FortiadcAutoScaleNameMap",
-                                    "FortiadcVersion",
-                                    "LATEST"
-                                ]
-                            }
+                        "Fn::GetAtt": [
+                            "StackFindAMI",
+                            "Outputs.LatestOnDemandAmiId"
                         ]
                     },
                     "BlockDeviceMappings": [],
