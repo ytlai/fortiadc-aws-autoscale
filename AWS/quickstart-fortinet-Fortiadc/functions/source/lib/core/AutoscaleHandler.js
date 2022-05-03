@@ -71,7 +71,7 @@ module.exports = class AutoscaleHandler {
                         config system auto-scale
                             set status enable
                             set sync-interface ${syncInterface ? syncInterface : 'port1'}
-                            set role slave
+                            set role secondary
                             set master-ip ${masterIp}
                             set callback-url ${apiEndpoint}
                             set psksecret ${pskSecret? pskSecret:'123456789'}
