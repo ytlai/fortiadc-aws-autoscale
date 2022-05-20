@@ -72,13 +72,13 @@ module.exports = class AutoscaleHandler {
                             set status enable
                             set sync-interface ${syncInterface ? syncInterface : 'port1'}
                             set role secondary
-                            set master-ip ${masterIp}
+                            set primary-ip ${masterIp}
                             set callback-url ${apiEndpoint}
                             set psksecret ${pskSecret? pskSecret:'123456789'}
                         end
                         config system global
                             set port-https ${adminPort? adminPort:'8443'}
-                            set port-http '80'
+                            set port-http '8080'
                         end
                     `;
         let errorMessage;
