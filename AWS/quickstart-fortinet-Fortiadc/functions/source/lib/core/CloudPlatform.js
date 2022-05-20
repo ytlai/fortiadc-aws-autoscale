@@ -135,6 +135,9 @@ module.exports = class CloudPlatform {
         await this.throwNotImplementedException();
     }
 
+    async removeOutdatedInstanceHealthCheck(aliveinstanceId) {
+        await this.throwNotImplementedException();
+    }
     async updateInstanceHealthCheck(healthCheckObject, heartBeatInterval, masterIp, checkPointTime,
         forceOutOfSync = false) {
         await this.throwNotImplementedException();
