@@ -1275,7 +1275,7 @@
                                 {
                                     "Effect": "Allow",
                                     "Action": [
-                                        "autoscaling:DescribeAutoScalingInstances",
+                                        "autoscaling:Describe*",
                                         "dynamodb:ListTables"
                                     ],
                                     "Resource": "*"
