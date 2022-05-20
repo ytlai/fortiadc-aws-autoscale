@@ -338,10 +338,10 @@
             "Type": "AWS::CloudFormation::Stack",
             "Properties": {
                 "Parameters": {
-                    "QSS3BucketName": {
+                    "S3BucketName": {
                         "Ref": "QSS3BucketName"
                     },
-                    "QSS3KeyPrefix": {
+                    "S3KeyPrefix": {
                         "Ref": "QSS3KeyPrefix"
                     }
                 },
@@ -923,7 +923,7 @@
                     "S3Bucket": {
                         "Fn::GetAtt": [
                             "StackCopyLambda",
-                            "Outputs.LambdaZipsBucket"
+                            "Outputs.DestinationBucket"
                         ]
                     },
                     "S3Key": {
