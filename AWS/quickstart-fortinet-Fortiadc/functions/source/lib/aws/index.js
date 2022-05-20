@@ -391,7 +391,10 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
                 TableName: DB.ELECTION.TableName,
                 Item: electedMaster
             };
-            let result = await docClient.put(params).promise();
+            let result = await docClient.put(params, function(err, data) {
+                if (err) logger.info(`called finalizeMasterElection, result: ${JSON.stringify(err)}`);
+                else logger.info(`called finalizeMasterElection, result: ${JSON.stringify(data)}`);
+            }).promise();
             logger.info(`called finalizeMasterElection, result: ${JSON.stringify(result)}`);
             return result;
         } catch (ex) {
@@ -612,7 +615,72 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
             return Promise.reject(error);
         }
     }
+    async removeOutdatedInstanceHealthCheck(aliveinstanceId) {
+        try {
+            let 
+                heartBeatLossCount,
+                heartBeatAllowLossCount = 5,
+                awaitAll = [],
+                unhealthyInstances = [],
+                data = await docClient.scan({
+                    TableName: DB.AUTOSCALE.TableName
+                }).promise();
 
+            let items = data.Items;
+            if (!(items && items.length)) {
+                logger.info('removeOudatedInstanceHealthCheck: there is no healthcheck item');
+                return null;
+            }
+            var params = {
+                AutoScalingGroupNames: [
+                    process.env.AUTO_SCALING_GROUP_NAME,
+             ]
+            };
+            let autoscaledata = await autoScaling.describeAutoScalingGroups(params).promise();
+            let instance_ids = [];
+    
+            autoscaledata.AutoScalingGroups.forEach(asg_resp => {
+                asg_resp.Instances.forEach(instance => {
+                    if (instance.LifecycleState === "InService") {
+                        instance_ids.push(instance.InstanceId);
+                    }
+                });
+            });
+            
+            let item_healthy = async item => {
+                if (item.instanceId === aliveinstanceId) {
+                    return true;
+                }
+                if (instance_ids.includes(item.instanceId)) {
+                    return true;
+                }
+                unhealthyInstances.push(item.instanceId);
+                return false;
+            };
+            items.forEach(item => {
+                awaitAll.push(item_healthy(item));
+            });
+            await Promise.all(awaitAll);
+            
+            if (unhealthyInstances.length === 0) {
+                logger.info('removeOudatedInstanceHealthCheck: no unhealthy instances');
+                return null;
+            }
+            awaitAll = [];
+            let deleteUnhealthItem = async instanceId => {
+                return await this.deleteInstanceHealthCheck(instanceId);
+            };
+            
+            unhealthyInstances.forEach(instanceId => {
+                awaitAll.push(deleteUnhealthItem(instanceId));
+            });
+            logger.info('called removeOudatedInstanceHealthCheck');
+        } catch (error) {
+            logger.info('called removeOudatedInstanceHealthCheck with error. ' +
+            `error: ${JSON.stringify(error)}`);
+            return null;
+        }
+    }
     async deleteInstanceHealthCheck(instanceId) {
         try {
             let params = {
@@ -1011,10 +1079,17 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 }
                 break;
             case 'EC2 Instance-terminate Lifecycle Action':
+                /*
                 if (event.detail.LifecycleTransition === 'autoscaling:EC2_INSTANCE_TERMINATING') {
                     await this.platform.cleanUpDbLifeCycleActions();
                     result = await this.handleTerminatingInstanceHook(event);
                 }
+                */
+                
+                break;
+            case 'EC2 Instance Terminate Successful':
+                await this.platform.cleanUpDbLifeCycleActions();
+                result = await this.handleTerminatingInstanceHook(event);
                 break;
             default:
                 logger.warn(`Ignore autoscaling event type: ${event['detail-type']}`);
@@ -1047,10 +1122,11 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
         // TODO: master health check
 
         this._selfInstance = await this.platform.describeInstance(parameters);
-        // if it is a response from fgt for getting its config
+        // if it is a response from fad for getting its config and add itself to hb monitor 
         if (fortiadcStatus) {
             // handle get config callback
-            return await this.handleGetConfigCallback(
+            //return await this.handleGetConfigCallback(
+            await this.handleGetConfigCallback(
                 this._selfInstance.InstanceId === this._masterInfo.InstanceId, statusSuccess);
         }
         // is myself under health check monitoring?
@@ -1084,6 +1160,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 if (!(this._masterInfo && this._masterHealthCheck &&
                               this._masterHealthCheck.healthy)) 
                 {
+                    //await this.platform.removeOutdatedInstanceHealthCheck(this._selfInstance.InstanceId);
                     // if no master or master is unhealthy, try to run a master election or check if a
                     // master election is running then wait for it to end
                     // promiseEmitter to handle the master election process by periodically check:
@@ -1111,6 +1188,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                             // if i am not the new master, and the master election is final, then no
                             // need to wait.
                             // should return true to end the waiting.
+                            //remove the outdated hc item
                             return true;
                         } else {
                             return false;
@@ -1456,6 +1534,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
             config = await this.getMasterConfig(await this.platform.getCallbackEndpointUrl());
             logger.info('called handleGetConfig: returning master config' +
             `(master-ip: ${masterInfo.PrivateIpAddress}):\n ${config}`);
+            await this.platform.removeOutdatedInstanceHealthCheck(this._selfInstance.InstanceId);
             return config;
         } else {
 
