@@ -19,7 +19,7 @@
         }
     },
     "Resources": {
-        "DdbTableMasterElection": {
+        "DdbTablePrimaryElection": {
             "Type": "AWS::DynamoDB::Table",
             "Properties": {
                 "AttributeDefinitions": [
@@ -45,7 +45,7 @@
                             {
                                 "Ref": "CustomIdentifier"
                             },
-                            "FortiadcMasterElection",
+                            "FortiadcPrimaryElection",
                             {
                                 "Ref": "UniqueId"
                             }
@@ -177,7 +177,7 @@
                     [
                         {
                             "Fn::GetAtt": [
-                                "DdbTableMasterElection",
+                                "DdbTablePrimaryElection",
                                 "Arn"
                             ]
                         },
