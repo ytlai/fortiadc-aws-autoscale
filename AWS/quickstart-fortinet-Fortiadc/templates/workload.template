@@ -664,7 +664,14 @@
                             "Outputs.LatestOnDemandAmiId"
                         ]
                     },
-                    "BlockDeviceMappings": [],
+					"BlockDeviceMappings": [{
+                      "Ebs":{
+                        "VolumeSize":"30",
+                        "VolumeType":"gp2",
+                        "DeleteOnTermination": true
+                      },
+                      "DeviceName":"/dev/sdb"
+                    }],
                     "IamInstanceProfile": {
                         "Arn": {
                             "Fn::GetAtt": [
@@ -1298,7 +1305,6 @@
                                     "Effect": "Allow",
                                     "Action": [
                                         "autoscaling:Describe*",
-                                        "autoscaling:DescribeAutoScalingInstances",
                                         "dynamodb:ListTables"
                                     ],
                                     "Resource": "*"
