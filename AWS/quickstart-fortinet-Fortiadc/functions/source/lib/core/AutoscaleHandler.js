@@ -53,7 +53,7 @@ module.exports = class AutoscaleHandler {
     }
 
     // async getSecondaryConfig(primaryIp, callbackUrl, syncInterface, pskSecret, adminPort) {
-    getSecondaryConfig(primaryIp, callbackUrl, syncInterface, pskSecret, adminPort) {
+    getSecondaryConfig(primaryIp, callbackUrl, syncInterface, adminPort, cfg_sync_port) {
         /*
         const
             autoScaleSectionMatch = AUTOSCALE_SECTION_EXPR.exec(this._baseConfig), //fix this match later
@@ -74,11 +74,12 @@ module.exports = class AutoscaleHandler {
                             set role secondary
                             set primary-ip ${primaryIp}
                             set callback-url ${apiEndpoint}
-                            set psksecret ${pskSecret? pskSecret:'123456789'}
+                            set config-sync-port ${cfg_sync_port}
                         end
                         config system global
                             set port-https ${adminPort? adminPort:'8443'}
                             set port-http '8080'
+                            set cloud-autoscale enable
                         end
                     `;
         let errorMessage;
@@ -89,18 +90,15 @@ module.exports = class AutoscaleHandler {
             errorMessage = 'Primary ip is missing';
         }
         
-        if (!pskSecret) {
-            errorMessage = 'psksecret is missing';
-        }
-        if (!pskSecret || !apiEndpoint || !primaryIp) {
+        
+        if (!apiEndpoint || !primaryIp) {
          
        // if (!apiEndpoint || !primaryIp) {
              throw new Error(`Base config is invalid (${errorMessage}): ${
                     JSON.stringify({
                         syncInterface,
                         apiEndpoint,
-                        primaryIp,
-                        pskSecret: pskSecret && typeof pskSecret
+                        primaryIp
                     })}`);
         }
         // await config.replace(SET_SECRET_EXPR, '$1 *');
@@ -125,3 +123,4 @@ module.exports = class AutoscaleHandler {
         return JSON.stringify(response);
     }
 };
+

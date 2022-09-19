@@ -24,6 +24,19 @@
             "ConstraintDescription": "must only contain uppercase and lowercase letters and numbers",
             "Description": "A custom identifier as resource name prefix. Must be at most 10 characters long and only contain uppercase, lowercase letters, and numbers. Max length is 10."
         },
+        "UniqueID": {
+            "Type": "String",
+            "MaxLength": "8",
+            "AllowedPattern": "[A-Za-z0-9]+",
+            "ConstraintDescription": "must only contain uppercase and lowercase letters and digits",
+            "Description": "A random generated suffix for some specific resources"
+        },
+        "ResourceTagPrefix": {
+            "Type": "String",
+            "AllowedPattern": "^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$",
+            "ConstraintDescription": "Resource tag prefix is composed of CustomIdentifier and UniqueID.",
+            "Description": "The Value for the Tag Key 'ResourceGroup' on all resources deployed in this stack."
+        },
         "VpcId": {
             "Type": "AWS::EC2::VPC::Id",
             "Description": "The existing VPC IDs where you deploy the Auto-Scaling group and related resources. The VPC must have the option 'DNS hostnames' enabled."
@@ -42,41 +55,23 @@
             "Type": "AWS::EC2::Subnet::Id",
             "Description": "Public (DMZ) subnet 2, which is located in Availability Zone 2."
         },
-        "PrivateSubnet1": {
-            "Type": "AWS::EC2::Subnet::Id",
-            "Description": "Private subnet, which is located in Availability Zone 1."
-        },
-        "PrivateSubnet2": {
-            "Type": "AWS::EC2::Subnet::Id",
-            "Description": "Private subnet, which is located in Availability Zone 2."
-        },
-        "PrivateSubnet1RouteTable": {
-            "Type": "String",
-            "Description": "Route table ID associated with the private subnet 1."
-        },
-        "PrivateSubnet2RouteTable": {
-            "Type": "String",
-            "Description": "Route table ID associated with the private subnet 2."
-        },
         "FortiadcInstanceType": {
             "Type": "String",
-            "Default": "c5.2xlarge",
+       	    "Default": "c5.xlarge",
             "AllowedValues": [
-                "m4.2xlarge",
-                "m4.4xlarge",
-                "m4.10xlarge",
+                "t3.large",
+                "t3.xlarge",
+                "t3.2xlarge",
+                "m5.large",
+                "m5.xlarge",
                 "m5.2xlarge",
-                "m5.4xlarge",
-                "m5.8xlarge",
-                "c4.2xlarge",
-                "c4.4xlarge",
-                "c4.8xlarge",
+                "c5.xlarge",
                 "c5.2xlarge",
                 "c5.4xlarge",
                 "c5.9xlarge"
             ],
             "ConstraintDescription": "must be a valid EC2 instance type.",
-            "Description": "Instance type to launch as Fortiadc On-Demand instances. There are compute-optimized instances such as c4 and c5 available with different vCPU sizes and bandwidths. For more information about instance types, see https://aws.amazon.com/ec2/instance-types/"
+            "Description": "Instance type to launch as Fortiadc On-Demand instances. There are compute-optimized instances such as t3 and c5 available with different vCPU sizes and bandwidths. For more information about instance types, see https://aws.amazon.com/ec2/instance-types/"
         },
         "ExpireLifecycleEntry": {
             "Type": "Number",
@@ -153,11 +148,23 @@
             "ConstraintDescription": "must be a valid port number between 1 and 65535.",
             "Description": "Balance web service traffic over this port if the internal web-service load balancer is enabled. Minimum is 1. Maximum is 65535."
         },
-        "FortiadcPskSecret": {
-            "Type": "String",
-            "NoEcho": true,
-            "Description": "A secret key for the Fortiadc instances to securely communicate with each other. It can be of your choice of a string, such as numbers or letters or the combination of them. Max length 128."
-        },
+		"ElasticIPOption": {
+			"Type": "String",
+			"Default": "add a new Elastic IP",
+			"AllowedValues": [
+				"add a new Elastic IP",
+			"use an Elastic IP specified below"
+			],
+			"ConstraintDescription": "must choose from the provided options.",
+			"Description": "Create new or use existing Elastic IP to manage FortiADC. Since autoscaling may create many instances, you need to log in to primary FortiADC on this IP address to manage all FortiADC instances. You can fill in the existing Elastic IP below, or let us create a new one for you. The default action is to use an existing Elastic IP."
+		},
+		"FortiadcElasticIP": {
+			"Type": "String",
+			"Default": "fadcASG-EIP",
+			"Description": "Elastic IP address or name, through which you can manage primary FortiADC. If you use an existing Elastic IP, fill it's IP address in here. If you create a new Elastic IP, give it a name so that you can find it easily in the AWS console.",
+			"AllowedPattern": "^.+$",
+			"ConstraintDescription": "must be a valid IP address format or a valid tag value."
+		},
         "FortiadcAdminPort": {
             "Type": "Number",
             "Default": 8443,
@@ -197,7 +204,15 @@
                     ]
                 }
             ]
-        }
+        },
+		"IfAddNewElasticIP": {
+			"Fn::Equals": [
+			{
+				"Ref": "ElasticIPOption"
+			},
+			"add a new Elastic IP"
+			]
+		}
     },
     "Mappings": {
         "FortiadcAutoScaleNameMap": {
@@ -292,7 +307,7 @@
                         "Ref": "QSS3BucketName"
                     },
                     "ZipCodeS3Key": {
-                    	"Fn::Sub": [
+                        "Fn::Sub": [
                             "${QSS3KeyPrefix}functions/packages/find_ami.zip",
                             {
                                 "QSS3KeyPrefix": {
@@ -326,28 +341,11 @@
                     "CustomIdentifier": {
                         "Ref": "CustomIdentifier"
                     },
-                    "UniqueId": {
-                        "Fn::Select": [
-                            0,
-                            {
-                                "Fn::Split": [
-                                    "-",
-                                    {
-                                        "Fn::Select": [
-                                            2,
-                                            {
-                                                "Fn::Split": [
-                                                    "/",
-                                                    {
-                                                        "Ref": "AWS::StackId"
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
+                    "ResourceTagPrefix": {
+                        "Ref": "ResourceTagPrefix"
+                    },
+                    "UniqueID": {
+                        "Ref": "UniqueID"
                     }
                 },
                 "TemplateURL": {
@@ -421,27 +419,7 @@
                                 },
                                 "Fortiadc-AutoScale-APIGateway",
                                 {
-                                    "Fn::Select": [
-                                        0,
-                                        {
-                                            "Fn::Split": [
-                                                "-",
-                                                {
-                                                    "Fn::Select": [
-                                                        2,
-                                                        {
-                                                            "Fn::Split": [
-                                                                "/",
-                                                                {
-                                                                    "Ref": "AWS::StackId"
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            ]
-                                        }
-                                    ]
+                                    "Ref": "UniqueID"
                                 }
                             ]
                         ]
@@ -484,7 +462,15 @@
                 "GroupDescription": "Fortiadc security group",
                 "VpcId": {
                     "Ref": "VpcId"
-                }
+                },
+                "Tags" : [
+                    {
+                        "Key": "ResourceGroup",
+                        "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                        }
+                    }
+                ]
             },
             "Metadata": {
                 "AWS::CloudFormation::Designer": {
@@ -625,9 +611,49 @@
                 }
             }
         },
+		"NewFortiadcElasticIP": {
+			"Type" : "AWS::EC2::EIP",
+			"Condition": "IfAddNewElasticIP",
+			"Properties" : {
+				"Tags": [
+				{ "Key": "Name", "Value": {"Ref": "FortiadcElasticIP"} },
+				{
+					"Key": "ResourceGroup",
+					"Value" : {
+						"Ref": "ResourceTagPrefix"
+					}
+				}
+				]
+			}
+		},
         "LaunchTemplatefadcAutoscale": {
             "Type": "AWS::EC2::LaunchTemplate",
             "Properties": {
+                "LaunchTemplateName" : {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "CustomIdentifier"
+                            },
+                            "LaunchTemplatefadcAutoscale",
+                            {
+                                "Ref": "UniqueID"
+                            }
+                        ]
+                    ]
+                },
+                "TagSpecifications" :[{
+                    "ResourceType" : "launch-template",
+                    "Tags" : [ 
+                        {
+                            "Key": "ResourceGroup",
+                            "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                            }
+                        }
+                    ]
+                }],
                 "LaunchTemplateData": {
                     "UserData": {
                         "Fn::Base64": {
@@ -664,7 +690,7 @@
                             "Outputs.LatestOnDemandAmiId"
                         ]
                     },
-					"BlockDeviceMappings": [{
+                    "BlockDeviceMappings": [{
                       "Ebs":{
                         "VolumeSize":"30",
                         "VolumeType":"gp2",
@@ -721,31 +747,20 @@
                             },
                             "FortiadcAutoScalingGroup",
                             {
-                                "Fn::Select": [
-                                    0,
-                                    {
-                                        "Fn::Split": [
-                                            "-",
-                                            {
-                                                "Fn::Select": [
-                                                    2,
-                                                    {
-                                                        "Fn::Split": [
-                                                            "/",
-                                                            {
-                                                                "Ref": "AWS::StackId"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
+                                "Ref": "UniqueID"
                             }
                         ]
                     ]
                 },
+                "Tags" : [
+                    {
+                        "Key": "ResourceGroup",
+                        "PropagateAtLaunch" : true,
+                        "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                        }
+                    }
+                ],
                 "LaunchTemplate": {
                     "LaunchTemplateId": {
                         "Ref": "LaunchTemplatefadcAutoscale"
@@ -914,31 +929,19 @@
                             },
                             "lffadc",
                             {
-                                "Fn::Select": [
-                                    0,
-                                    {
-                                        "Fn::Split": [
-                                            "-",
-                                            {
-                                                "Fn::Select": [
-                                                    2,
-                                                    {
-                                                        "Fn::Split": [
-                                                            "/",
-                                                            {
-                                                                "Ref": "AWS::StackId"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
+                                "Ref": "UniqueID"
                             }
                         ]
                     ]
                 },
+                "Tags" : [
+                    {
+                        "Key": "ResourceGroup",
+                        "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                        }
+                    }
+                ],
                 "Runtime": "nodejs14.x",
                 "Role": {
                     "Fn::GetAtt": [
@@ -980,27 +983,7 @@
                                     },
                                     "Fortiadc-AutoScale-APIGateway",
                                     {
-                                        "Fn::Select": [
-                                            0,
-                                            {
-                                                "Fn::Split": [
-                                                    "-",
-                                                    {
-                                                        "Fn::Select": [
-                                                            2,
-                                                            {
-                                                                "Fn::Split": [
-                                                                    "/",
-                                                                    {
-                                                                        "Ref": "AWS::StackId"
-                                                                    }
-                                                                ]
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
+                                        "Ref": "UniqueID"
                                     }
                                 ]
                             ]
@@ -1008,27 +991,7 @@
                         "API_GATEWAY_STAGE_NAME": "prod",
                         "API_GATEWAY_RESOURCE_NAME": "complete",
                         "UNIQUE_ID": {
-                            "Fn::Select": [
-                                0,
-                                {
-                                    "Fn::Split": [
-                                        "-",
-                                        {
-                                            "Fn::Select": [
-                                                2,
-                                                {
-                                                    "Fn::Split": [
-                                                        "/",
-                                                        {
-                                                            "Ref": "AWS::StackId"
-                                                        }
-                                                    ]
-                                                }
-                                            ]
-                                        }
-                                    ]
-                                }
-                            ]
+                            "Ref": "UniqueID"
                         },
                         "CUSTOM_ID": {
                             "Ref": "CustomIdentifier"
@@ -1042,27 +1005,7 @@
                                     },
                                     "FortiadcAutoScalingGroup",
                                     {
-                                        "Fn::Select": [
-                                            0,
-                                            {
-                                                "Fn::Split": [
-                                                    "-",
-                                                    {
-                                                        "Fn::Select": [
-                                                            2,
-                                                            {
-                                                                "Fn::Split": [
-                                                                    "/",
-                                                                    {
-                                                                        "Ref": "AWS::StackId"
-                                                                    }
-                                                                ]
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
+                                        "Ref": "UniqueID"
                                     }
                                 ]
                             ]
@@ -1099,14 +1042,17 @@
                                 ]
                             ]
                         },
-                        "FORTIADC_PSKSECRET": {
-                            "Ref": "FortiadcPskSecret"
-                        },
                         "FORTIADC_ADMIN_PORT": {
                             "Ref": "FortiadcAdminPort"
                         },
                         "FORTIADC_TRAFFIC_PORT": {
                             "Ref": "BalanceWebTrafficOverPort"
+                        },
+						"ElasticIP": {
+                            "Fn::If" : [
+                            "IfAddNewElasticIP",
+                            {"Ref": "NewFortiadcElasticIP"},
+                            {"Ref": "FortiadcElasticIP"}]
                         }
                     }
                 }
@@ -1272,27 +1218,7 @@
                                                             },
                                                             "FortiadcAutoScalingGroup",
                                                             {
-                                                                "Fn::Select": [
-                                                                    0,
-                                                                    {
-                                                                        "Fn::Split": [
-                                                                            "-",
-                                                                            {
-                                                                                "Fn::Select": [
-                                                                                    2,
-                                                                                    {
-                                                                                        "Fn::Split": [
-                                                                                            "/",
-                                                                                            {
-                                                                                                "Ref": "AWS::StackId"
-                                                                                            }
-                                                                                        ]
-                                                                                    }
-                                                                                ]
-                                                                            }
-                                                                        ]
-                                                                    }
-                                                                ]
+                                                                "Ref": "UniqueID"
                                                             }
                                                         ]
                                                     ]
@@ -1350,6 +1276,15 @@
                                             }
                                         ]
                                     }
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:DescribeAddresses",
+                                        "ec2:AssociateAddress",
+                                        "ec2:DisassociateAddress"
+                                    ],
+                                    "Resource": "*"
                                 }
                             ]
                         }
@@ -1378,27 +1313,7 @@
                                         },
                                         "FortiadcAutoScalingGroup",
                                         {
-                                            "Fn::Select": [
-                                                0,
-                                                {
-                                                    "Fn::Split": [
-                                                        "-",
-                                                        {
-                                                            "Fn::Select": [
-                                                                2,
-                                                                {
-                                                                    "Fn::Split": [
-                                                                        "/",
-                                                                        {
-                                                                            "Ref": "AWS::StackId"
-                                                                        }
-                                                                    ]
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            ]
+                                            "Ref": "UniqueID"
                                         }
                                     ]
                                 ]
@@ -1539,31 +1454,19 @@
                             },
                             "tgfadc",
                             {
-                                "Fn::Select": [
-                                    0,
-                                    {
-                                        "Fn::Split": [
-                                            "-",
-                                            {
-                                                "Fn::Select": [
-                                                    2,
-                                                    {
-                                                        "Fn::Split": [
-                                                            "/",
-                                                            {
-                                                                "Ref": "AWS::StackId"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
+                                    "Ref": "UniqueID"
                             }
                         ]
                     ]
                 },
+                "Tags" : [
+                    {
+                        "Key": "ResourceGroup",
+                        "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                        }
+                    }
+                ],
                 "Protocol": "TCP",
                 "Port": {
                     "Fn::If": [
@@ -1613,6 +1516,14 @@
                         "Ref": "PublicSubnet2"
                     }
                 ],
+                "Tags" : [
+                    {
+                        "Key": "ResourceGroup",
+                        "Value" : {
+                            "Ref": "ResourceTagPrefix"
+                        }
+                    }
+                ],
                 "Name": {
                     "Fn::Join": [
                         "-",
@@ -1622,27 +1533,7 @@
                             },
                             "nlbfadc",
                             {
-                                "Fn::Select": [
-                                    0,
-                                    {
-                                        "Fn::Split": [
-                                            "-",
-                                            {
-                                                "Fn::Select": [
-                                                    2,
-                                                    {
-                                                        "Fn::Split": [
-                                                            "/",
-                                                            {
-                                                                "Ref": "AWS::StackId"
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
+                                "Ref": "UniqueID"
                             }
                         ]
                     ]
@@ -1710,11 +1601,7 @@
                         "VpcId",
                         "VPCCIDR",
                         "PublicSubnet1",
-                        "PublicSubnet2",
-                        "PrivateSubnet1",
-                        "PrivateSubnet2",
-                        "PrivateSubnet1RouteTable",
-                        "PrivateSubnet2RouteTable"
+                        "PublicSubnet2"
                     ]
                 },
                 {
@@ -1724,7 +1611,6 @@
                     "Parameters": [
                         "CustomIdentifier",
                         "FortiadcInstanceType",
-                        "FortiadcPskSecret",
                         "FortiadcAdminPort",
                         "FortiadcAdminCidr",
                         "KeyPairName"
@@ -1774,22 +1660,10 @@
                     "default": "VPC ID"
                 },
                 "PublicSubnet1": {
-                    "default": "Fortiadc subnet 1"
+                    "default": "Public subnet 1"
                 },
                 "PublicSubnet2": {
-                    "default": "Fortiadc subnet 2"
-                },
-                "PrivateSubnet1": {
-                    "default": "Protected subnet 1"
-                },
-                "PrivateSubnet2": {
-                    "default": "Protected subnet 2"
-                },
-                "PrivateSubnet1RouteTable": {
-                    "default": "Route table 1 ID"
-                },
-                "PrivateSubnet2RouteTable": {
-                    "default": "Route table 2 ID"
+                    "default": "Public subnet 2"
                 },
                 "FortiadcInstanceType": {
                     "default": "Instance type"
@@ -1845,11 +1719,14 @@
                 "KeyPairName": {
                     "default": "Key pair name"
                 },
+				"ElasticIPOption": {
+					"default": "FortiADC Elastic IP option"
+				},
+				"FortiadcElasticIP": {
+					"default": "FortiADC Elastic IP or Name"
+				},
                 "VPCCIDR": {
                     "default": "VPC CIDR"
-                },
-                "FortiadcPskSecret": {
-                    "default": "Fortiadc PSK secret"
                 }
             }
         },

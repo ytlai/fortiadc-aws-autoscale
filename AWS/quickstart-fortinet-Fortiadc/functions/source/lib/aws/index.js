@@ -28,7 +28,6 @@ const
     s3 = new AWS.S3(),
     unique_id = process.env.UNIQUE_ID.replace(/.*\//, ''),
     custom_id = process.env.CUSTOM_ID.replace(/.*\//, ''),
-    // SCRIPT_TIMEOUT = 300,
     DB = {
         LIFECYCLEITEM: {
             AttributeDefinitions: [
@@ -100,6 +99,10 @@ const
                 },
                 {
                     AttributeName: 'voteState',
+                    AttributeType: 'S'
+                },
+                {
+                    AttributeName: 'voteEndTime',
                     AttributeType: 'S'
                 }
             ],
@@ -371,51 +374,65 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
         logger.info(`Elected primary found: ${JSON.stringify(items[0])}`, JSON.stringify(items));
         return items[0];
     }
-    async getPrimaryRecord() {
-        return await this.getElectedPrimary();
-    }
     async removePrimaryRecord() {
-        // only purge the primary with a done votestate to avoid a
-        // race condition
         const params = {
             TableName: DB.ELECTION.TableName,
             Key: {
-                // asgName: process.env.AUTO_SCALING_GROUP_NAME,
-                // votestate: "done"
                 asgName: process.env.AUTO_SCALING_GROUP_NAME
             } 
         };
         return await docClient.delete(params).promise();
     }
-    async finalizePrimaryElection() {
+    async attachElasticIP(instanceId) {
         try {
-            logger.info('calling finalizePrimaryElection');
-            let electedPrimary = await this.getElectedPrimary();
+            logger.log(`${instanceId} calling attachElasticIP`);
+            let elasticIP = process.env.ElasticIP;
+    
+            let asso_params = {
+                AllowReassociation: true,
+                PublicIp: elasticIP,
+                InstanceId: instanceId
+            };
+            let result1 = await ec2.associateAddress(asso_params).promise();
+            logger.log('EIP association result' + `${JSON.stringify(result1)}`);
+        } catch (ex) {
+            logger.warn(`${instanceId} called attachElasticIP, error:`, ex.stack);
+            return false;
+        }
+    }
+
+    async finalizePrimaryElection(instanceID, primary_record = null) {
+        try {
+            logger.info(`${instanceID} calling finalizePrimaryElection`);
+            let electedPrimary, elected_id;
+            if (!primary_record) electedPrimary = await this.getElectedPrimary();
+            else electedPrimary = primary_record;
             electedPrimary.voteState = 'done';
+            elected_id = electedPrimary.instanceId;
+            logger.info(`hello : ${JSON.stringify(electedPrimary)}`);
             const params = {
                 TableName: DB.ELECTION.TableName,
                 Item: electedPrimary
             };
             let result = await docClient.put(params, function(err, data) {
-                if (err) logger.info(`called finalizePrimaryElection, result: ${JSON.stringify(err)}`);
-                else logger.info(`called finalizePrimaryElection, result: ${JSON.stringify(data)}`);
+                if (err) {logger.info(`${instanceID} called finalizePrimaryElection, result: ${JSON.stringify(err)}`);}
             }).promise();
-            logger.info(`called finalizePrimaryElection, result: ${JSON.stringify(result)}`);
+            
+            await this.attachElasticIP(electedPrimary.instanceId);
+            logger.info(`${instanceID} called finalizePrimaryElection, result: ${JSON.stringify(result)}`);
             return result;
         } catch (ex) {
-            logger.warn('called finalizePrimaryElection, error:', ex.stack);
+            logger.warn(`${instanceID} called finalizePrimaryElection, error:`, ex.stack);
             return false;
         }
     }
     async addConfig(heartBeatLossCount = 5, heartDelayAllowance = 60) {
-        //logger.info('calling addConfig');
-        
         var searchparams = {
             Key: {
                 configName: 'heartBeatAllowLossCount'
             },
             TableName: DB.CONFIGSET.TableName
-        }
+        };
         var data = await docClient.get(searchparams).promise();
         if (!data.Item) {
             console.log('no heartBeatLossCount');
@@ -454,7 +471,71 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
         
         return [heartBeatLossCount, heartDelayAllowance];
     }
-
+    async addConfigSyncPort(cfgsyncport = 10443) {
+        let port = 10443;
+        if (cfgsyncport != -1) {
+            port = cfgsyncport;
+        }
+        var searchparams = {
+            Key: {
+                configName: 'configSyncPort'
+            },
+            TableName: DB.CONFIGSET.TableName
+        };
+        var params = {
+            Item: {
+                configName: 'configSyncPort',
+                value: port
+            },
+            TableName: DB.CONFIGSET.TableName
+        };
+        var data = await docClient.get(searchparams).promise();
+        if (!data.Item) {
+            console.log('no configSyncPort');
+            await docClient.put(params).promise();
+            return port;
+        } else {
+            if (cfgsyncport != -1 && data.Item.value != cfgsyncport) {
+                params = {
+                    Item: {
+                        configName: 'configSyncPort',
+                        value: cfgsyncport
+                    },
+                    TableName: DB.CONFIGSET.TableName
+                };
+                await docClient.put(params).promise();
+                return cfgsyncport;
+            }
+            return data.Item.value;
+        }
+    }
+    async addFortiADCImageVersion(image, is_primary=false) {
+        
+        var searchparams = {
+            Key: {
+                configName: 'FortiADCImageVersion'
+            },
+            TableName: DB.CONFIGSET.TableName
+        };
+        var params = {
+            Item: {
+                configName: 'FortiADCImageVersion',
+                value: image
+            },
+            TableName: DB.CONFIGSET.TableName
+        };
+        
+        if (is_primary) {
+            console.log(`Update FortiADC Image Version to ${image}`);
+            await docClient.put(params).promise();
+            return image;
+        }
+        var data = await docClient.get(searchparams).promise();
+        if (data && data.Item) {
+            return data.Item.value;
+        }
+        return "";
+    }
     async getInstanceBornTime(instanceId) {
         if (!instanceId) {
             logger.error('getInstanceBornTime > error: no instanceId property found' +
@@ -525,7 +606,7 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
             interval = heartBeatInterval && !isNaN(heartBeatInterval) ?
                 heartBeatInterval : healthCheckRecord.heartBeatInterval;
             heartBeatDelays = scriptExecutionStartTime - healthCheckRecord.nextHeartBeatTime;
-            // The the inevitable-fail-to-sync time is defined as:
+            // The inevitable-fail-to-sync time is defined as:
             // the maximum amount of time for an instance to be able to sync without being
             // deemed unhealth. For example:
             // the instance has x (x < hb loss count allowance) loss count recorded.
@@ -579,7 +660,7 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
                 }
             }
             logger.info('called getInstanceHealthCheck. (timestamp: ' +
-                `${scriptExecutionStartTime},  interval:${heartBeatInterval})` +
+                `${scriptExecutionStartTime},  interval:${interval})` +
                 'healthcheck record:',
                 JSON.stringify(healthCheckRecord));
             return {
@@ -589,9 +670,6 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
                 heartBeatLossCount: heartBeatLossCount,
                 heartBeatInterval: interval,
                 nextHeartBeatTime: Date.now() + interval * 1000,
-                // primaryIp: healthCheckRecord.primaryIp,
-                // syncState: healthCheckRecord.syncState,
-                // inSync: healthCheckRecord.syncState === 'in-sync',
                 inevitableFailToSyncTime: inevitableFailToSyncTime,
                 healthCheckTime: scriptExecutionStartTime
             };
@@ -623,9 +701,6 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
                     ':HeartBeatLossCount': healthCheckObject.heartBeatLossCount,
                     ':HeartBeatInterval': heartBeatInterval,
                     ':NextHeartBeatTime': checkPointTime + heartBeatInterval * 1000
-                    // ':PrimaryIp': primaryIp ? primaryIp : 'null',
-                    // ':SyncState': healthCheckObject.healthy && !forceOutOfSync ?
-                    //    'in-sync' : 'out-of-sync'
                 },
                 ConditionExpression: 'attribute_exists(instanceId)'
             };
@@ -755,7 +830,7 @@ class AwsPlatform extends AutoScaleCore.CloudPlatform {
             });
         }
         const result = await ec2.describeInstances(params).promise();
-        logger.info(`called describeInstance, result: ${JSON.stringify(result)}`);
+        logger.info(`${parameters.instanceId}: called describeInstance, result: ${JSON.stringify(result)}`);
         return result.Reservations[0] && result.Reservations[0].Instances[0];
     }
 
@@ -858,7 +933,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 result = await this.handleGetConfig(event);
                 callback(null, proxyResponse(200, result));
             } else {
-                this._step = '¯\\_(ツ)_/¯';
+                this._step = '';
 
                 logger.log(`${this._step} unexpected event!`, event);
                 // probably a test call from the lambda console?
@@ -902,7 +977,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
      * @param {Object} candidateInstance instance of the fortiadc which wants to become the primary
      * @param {Object} purgePrimaryRecord primary record of the old primary, if it's dead.
      */
-    async putPrimaryElectionVote(candidateInstance, purgePrimaryRecord = null) {
+    async putPrimaryElectionVote(candidateInstance, original_primary_id = "", purgePrimaryRecord = null) {
         //Elect the instance with state "InService" and with the earliest born time
         try {
             let params = {
@@ -913,15 +988,20 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                     instanceId: candidateInstance.InstanceId,
                     vpcId: candidateInstance.VpcId,
                     subnetId: candidateInstance.SubnetId,
-                    voteState: 'pending'
+                    voteState: 'pending',
+                    voteEndTime: process.env.SCRIPT_EXECUTION_EXPIRE_TIME - 6000
+                    
                 },
                 ConditionExpression: 'attribute_not_exists(asgName)'
             };
-            logger.log('PrimaryElectionVote, purge Primary?', JSON.stringify(purgePrimaryRecord));
+            logger.log(`PrimaryElectionVote, purge Primary ${original_primary_id} ?`, JSON.stringify(purgePrimaryRecord));
             if (purgePrimaryRecord) {
                 try {
-                    const purged = await this.purgePrimary(process.env.AUTO_SCALING_GROUP_NAME);
-                    logger.log('purged: ', purged);
+                    let purged = await this.purgePrimary(process.env.AUTO_SCALING_GROUP_NAME);
+                    logger.log('purged primary : ', purged);
+                    if (original_primary_id){
+                        await this.deleteInstanceHealthCheck(original_primary_id);
+                    }
                 } catch (error) {
                     logger.log('no Primary purge');
                 }
@@ -943,7 +1023,8 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
         
             autoscaledata.AutoScalingGroups.forEach(asg_resp => {
                 asg_resp.Instances.forEach(instance => {
-                    if (instance.LifecycleState === "InService") {
+                    if (instance.LifecycleState === "InService" && instance.InstanceId != original_primary_id) {
+                        //should exclude the original primary
                         InserviceInstances.push(instance.InstanceId);
                     }
                 });
@@ -960,7 +1041,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
             let gethealthyitem = async instanceId => {
                 let hcresult = await this.platform.getInstanceHealthCheck({
             instanceId: instanceId});
-				if (!hcresult) {
+                if (!hcresult) {
                    logger.log('No healthcheck record. It is at init stage');
                 }
                 if (!hcresult || hcresult.healthy) {
@@ -1026,7 +1107,8 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                     instanceId: seeded_primary.InstanceId,
                     vpcId: seeded_primary.VpcId,
                     subnetId: seeded_primary.SubnetId,
-                    voteState: 'pending'
+                    voteState: 'pending',
+                    voteEndTime: process.env.SCRIPT_EXECUTION_EXPIRE_TIME - 6000
                 },
                 ConditionExpression: 'attribute_not_exists(asgName)'
             };
@@ -1043,23 +1125,22 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
         return await instance;
     }
 
-    async electPrimary() {
-        // return the current primary record
-        return !!await this.platform.getElectedPrimary();
-    }
     async checkPrimaryElection() {
         logger.info(`${this._selfInstance.InstanceId}: ` + 'calling checkPrimaryElection');
         let needElection = false,
             purgePrimary = false,
             electionLock = false,
-            electionComplete = false;
+            electionComplete = false,
+            original_primary_id = "";
 
         // reload the primary
         await this.retrievePrimary(null, true);
+        if (this._primaryRecord) {
+            original_primary_id = this._primaryRecord.instanceId;
+        }
         logger.info('current primary node healthcheck:', JSON.stringify(this._primaryHealthCheck));
-        // is there a primary election done?
-        // check the primary record and its voteState
-        // if there's a complete election, get primary health check
+        
+        
         if (this._primaryRecord && this._primaryRecord.voteState === 'done') {
             // if primary is unhealthy, we need a new election
             if (!this._primaryHealthCheck ||
@@ -1070,48 +1151,41 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
             }
         } else if (this._primaryRecord && this._primaryRecord.voteState === 'pending') {
             // if there's a pending primary election, and if this election is incomplete by
-            // the end-time, purge this election and starta new primary election. otherwise, wait
+            // the end-time, purge this election and start a new primary election. otherwise, wait
             // until it's finished
-            // needElection = purgePrimary = Date.now() > this._primaryRecord.voteEndTime;
-            // wait for it to complete
-            purgePrimary = needElection = false;
+            needElection = purgePrimary = Date.now() > this._primaryRecord.voteEndTime;
+            if (needElection) {
+                logger.warn('Elected primary '+ this._primaryRecord.instanceId + ' is pending timeout. Purge it.');
+            }
         } else {
             // if no primary, try to hold a primary election
             needElection = true;
             purgePrimary = false;
         }
-        // if we need a new primary, let's hold a primary election!
         if (needElection) {
            
             // try to put myself as the primary candidate
-            electionLock = await this.putPrimaryElectionVote(this._selfInstance, purgePrimary);
+            electionLock = await this.putPrimaryElectionVote(this._selfInstance, original_primary_id, purgePrimary);
             if (electionLock) {
-                    // yes, you run it!
-                /*logger.info(`This instance (id: ${this._selfInstance.InstanceId})` +
-                    ' is running an election.');
-                */
                 try {
-                    // (diagram: elect new primary from queue (existing instances))
-                    electionComplete = await this.electPrimary();
+                    this._primaryRecord = await this.platform.getElectedPrimary();
+                    electionComplete = !!this._primaryRecord;
                     logger.info(`Election completed: ${electionComplete}`);
-                        // (diagram: primary exists?)
+                    this._primaryInfo = electionComplete && await this.getPrimaryInfo(this._primaryRecord.instanceId, this._primaryRecord.ip);
                     this._primaryRecord = null;
-                    this._primaryInfo = electionComplete && await this.getPrimaryInfo();
+                    
                     } catch (error) {
                         logger.error('Something went wrong in the primary election.');
                     }
-                } else {
-                    // election returned false, delete the current primary info. do the election
-                    // again
-                    this._primaryRecord = null;
-                    this._primaryInfo = null;
-                }
-            
+            } else {
+                // election returned false, delete the current primary info. do the election
+                // again
+                this._primaryRecord = null;
+                this._primaryInfo = null;
+            }
         }
         return Promise.resolve(this._primaryInfo); // return the new primary
     }
-
-
 
     async getConfigSetFromDb(name) {
         const query = {
@@ -1157,12 +1231,11 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 configContent = await this.getConfigSetFromS3('internalelbweb') + configContent;
             }
             baseConfig = baseConfig + configContent;
-            let psksecret = process.env.FORTIADC_PSKSECRET;
+
             baseConfig = baseConfig
                 .replace(new RegExp('{SYNC_INTERFACE}', 'gm'),
                     process.env.FORTIADC_SYNC_INTERFACE ?
                         process.env.FORTIADC_SYNC_INTERFACE : 'port1')
-                .replace(new RegExp('{PSK_SECRET}', 'gm'), psksecret)
                 .replace(new RegExp('{ADMIN_PORT}', 'gm'),
                     process.env.FORTIADC_ADMIN_PORT ? process.env.FORTIADC_ADMIN_PORT : 8443);
         }
@@ -1175,19 +1248,10 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
         return await this._baseConfig.replace(/\{CALLBACK_URL}/, callbackUrl);
     }
 
-    async getPrimaryInfo() {
+    async getPrimaryInfo(instanceId, primaryIp) {
         logger.info('calling getPrimaryInfo');
-        let primaryRecord, primaryIp;
-        try {
-            primaryRecord = await this.platform.getElectedPrimary();
-            if (primaryRecord === null) {
-                return null;
-            }
-            primaryIp = primaryRecord.ip;
-        } catch (ex) {
-            logger.error(ex.message);
-        }
-        return primaryRecord && await this.platform.describeInstance({privateIp: primaryIp});
+       
+        return await this.platform.describeInstance({instanceId:instanceId, privateIp: primaryIp});
     }
 
     /* ==== Sub-Handlers ==== */
@@ -1241,32 +1305,65 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
             heartBeatInterval = this.findHeartBeatInterval(event),
             fortiadcStatus = this.findFortiADCStatus(event),
             statusSuccess = fortiadcStatus && fortiadcStatus === 'success' || false;
-        // if fortiadc is sending callback in response to obtaining config, this is a state
-        // message
         let parameters = {}, selfHealthCheck;
 
         parameters.instanceId = callingInstanceId;
-        // handle hb monitor
-        // get primary instance monitoring
-        // let primaryInfo = await this.getPrimaryInfo();
-        await this.retrievePrimary();
-        // TODO: primary health check
+        //check if the instance is in ASG
+        var params = {
+          InstanceIds: [
+            callingInstanceId
+          ]
+        };
+        let data = await autoScaling.describeAutoScalingInstances(params).promise();
 
+        if (data && data.AutoScalingInstances.length) {
+            var callinginstance = data.AutoScalingInstances[0];
+            if (callinginstance.AutoScalingGroupName != process.env.AUTO_SCALING_GROUP_NAME ) {
+                logger.warn(`instance ${callingInstanceId} is not in ASG: ${process.env.AUTO_SCALING_GROUP_NAME}`);
+                this._primaryRecord = await this.platform.getElectedPrimary();
+                if (this._primaryRecord && callingInstanceId === this._primaryRecord.instanceId){
+                    await this.platform.removePrimaryRecord();
+                }
+                await this.platform.deleteInstanceHealthCheck(callingInstanceId);
+                return  {
+                    'action': 'disable-autoscale'
+                };
+            }
+        } else {
+            logger.warn(`instance ${callingInstanceId} is not in ASG: ${process.env.AUTO_SCALING_GROUP_NAME}`);
+            this._primaryRecord = await this.platform.getElectedPrimary();
+            if (this._primaryRecord && callingInstanceId === this._primaryRecord.instanceId) {
+                    await this.platform.removePrimaryRecord();
+            }
+            await this.platform.deleteInstanceHealthCheck(callingInstanceId);
+            return  {
+                'action': 'disable-autoscale'
+            };
+        }
+        logger.info(`instance ${callingInstanceId} is in ASG: ${process.env.AUTO_SCALING_GROUP_NAME}`);
+        await this.retrievePrimary();
+        
+        
         this._selfInstance = await this.platform.describeInstance(parameters);
         // if it is a response from fad for getting its config and add itself to hb monitor 
         if (fortiadcStatus) {
-            // handle get config callback
-            //return await this.handleGetConfigCallback(
-            await this.handleGetConfigCallback(
-                this._selfInstance.InstanceId === this._primaryInfo.InstanceId, statusSuccess);
+            if (this._primaryInfo && this._primaryRecord) {
+                await this.handleGetConfigCallback(
+                    this._selfInstance.InstanceId === this._primaryInfo.InstanceId, statusSuccess, this._primaryRecord);
+            }
         }
-        // is myself under health check monitoring?
-        // do self health check
+        
+        if (this._primaryInfo && this._primaryRecord) {
+            let image_compatible = await this.checkFortiADCImageVersion(event, this._selfInstance.InstanceId === this._primaryInfo.InstanceId);
+            if (!image_compatible) {
+                return{};
+            }
+        }
+        
         selfHealthCheck = await this.platform.getInstanceHealthCheck({
             instanceId: this._selfInstance.InstanceId
         }, heartBeatInterval);
-        // if no record found, this instance not under monitor. should make sure its all
-        // lifecycle actions are complete before starting to monitor it
+        
         if (!selfHealthCheck) {
             await this.addInstanceToMonitor(this._selfInstance,
                 (Date.now() + heartBeatInterval * 1000), heartBeatInterval);
@@ -1280,15 +1377,33 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 `heartBeatLossCount: ${selfHealthCheck.heartBeatLossCount}, ` +
                 `nextHeartBeatTime: ${selfHealthCheck.nextHeartBeatTime}).`);
             if (!selfHealthCheck.healthy) {
-               // this happens when 
                // make instance shutdown. go through auto scale terminate process
+               /*
                 return  {
                 'action': 'shutdown'
                 };
+                */
+                //As I am unhealthy, I can't be the primary node, wait for the new primary.
+                if (this._primaryInfo && this._selfInstance.InstanceId != this._primaryInfo.InstanceId) {
+                    let now = Date.now();
+                    selfHealthCheck.heartBeatLossCount = 0;
+                    await this.platform.updateInstanceHealthCheck(selfHealthCheck, heartBeatInterval, 0, now);
+                    logger.info(`hb record updated on (timestamp: ${now}, instance id:` +
+                    `${this._selfInstance.InstanceId} is back on the track.`
+                    );
+                }
             } else {
 
-                // check if primary is healthy. if it is not, try to hold a primary election
-                if (!(this._primaryInfo && this._primaryHealthCheck &&
+                //check if I am running the primary election
+                if (this._primaryInfo && this._selfInstance.InstanceId === this._primaryInfo.InstanceId &&
+                    this._primaryRecord && this._primaryRecord.voteState === 'pending') {
+                     
+                    if (!await this.platform.finalizePrimaryElection(this._selfInstance.InstanceId, this._primaryRecord)) {
+                        //can't finalize the election, let others run it by pending timeout
+                    } else {
+                        this._primaryRecord.voteState = 'done';
+                    }
+                } else if (!(this._primaryInfo && this._primaryHealthCheck &&
                               this._primaryHealthCheck.healthy)) 
                 {
                     // if no primary or primary is unhealthy, try to hold a primary election
@@ -1320,8 +1435,8 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                     // counter to set a time based condition to end this waiting. If script execution
                     // time is close to its timeout (6 seconds - abount 1 inteval + 1 second), ends the
                     // waiting to allow for the rest of logic to run
-                    counter = currentCount => { // eslint-disable-line no-unused-vars
-                        if (Date.now() < process.env.SCRIPT_EXECUTION_EXPIRE_TIME - 6000) {
+                    counter = currentCount => {
+                        if (Date.now() < process.env.SCRIPT_EXECUTION_EXPIRE_TIME - 3000) {
                             return false;
                         }
                         logger.warn('script execution is about to expire');
@@ -1331,13 +1446,27 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                     try {
                         this._primaryInfo = await AutoScaleCore.waitFor(
                             promiseEmitter, validator, 5000, counter);
-                        logger.info(`${this._selfInstance.InstanceId}: Elected primary done`);
+                        logger.info(`${this._selfInstance.InstanceId}: Check primary election done`);
+                        await this.retrievePrimary(null, true);
+                        // if this instance is the primary instance and the election is still pending, it will
+                        // finalize the primary election.
+                        if (this._primaryInfo && this._selfInstance.InstanceId === this._primaryInfo.InstanceId &&
+                            this._primaryRecord && this._primaryRecord.voteState === 'pending') {
+                            // if election couldn't be finalized, remove the current election so someone else
+                            // could start another election
+                            if (!await this.platform.finalizePrimaryElection(this._selfInstance.InstanceId, this._primaryRecord)) {
+                                await this.platform.removePrimaryRecord();
+                                this._primaryRecord = null;
+                            } else {
+                                this._primaryRecord.voteState = 'done';
+                            }
+                        }
                     } catch (error) {
                         // if error occurs, check who is holding a primary election, if it is this instance,
                         // terminates this election. then continue
                         await this.retrievePrimary(null, true);
 
-                        if (this._primaryRecord.instanceId === this._selfInstance.instanceId ) {
+                        if (this._primaryRecord.instanceId === this._selfInstance.InstanceId ) {
                             await this.platform.removePrimaryRecord();
                         }
                         
@@ -1347,22 +1476,6 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                         
                     }
                 }
-                await this.retrievePrimary(null, true);
-                // if this instance is the primary instance and the primary record is still pending, it will
-                // finalize the primary election.
-                if (this._primaryInfo && this._selfInstance.instanceId === this._primaryInfo.instanceId &&
-                    this._primaryRecord && this._primaryRecord.voteState === 'pending') {
-                    // if election couldn't be finalized, remove the current election so someone else
-                    // could start another election
-                    if (!await this.platform.finalizePrimaryElection()) {
-                        await this.platform.removePrimaryRecord();
-                        this._primaryRecord = null;
-                    }
-                    await this.retrievePrimary(null, true);
-                    
-                }
-
-
                 // update instance hb next time
                 let now = Date.now();
                 await this.platform.updateInstanceHealthCheck(selfHealthCheck, heartBeatInterval, 0, now);
@@ -1373,42 +1486,33 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 `heartBeatLossCount: ${selfHealthCheck.heartBeatLossCount}, ` +
                 `nextHeartBeatTime: ${selfHealthCheck.nextHeartBeatTime}.`
                 );
-                if (this._primaryInfo &&
-                    this._primaryRecord && this._primaryRecord.voteState === 'done') {
-                    return {'primary-ip':this._primaryInfo.PrivateIpAddress};
-                }
-                return {};
-                
             }
-        }
             
-        
+            
+            if (this._primaryInfo &&
+                this._primaryRecord && this._primaryRecord.voteState === 'done') {
+                let fadcfgsyncport = await this.findFortiADCCfgSyncPort(event, this._selfInstance.InstanceId === this._primaryInfo.InstanceId);
+                if (fadcfgsyncport) {
+                    logger.info(`fadcfgsyncport: ${fadcfgsyncport}`);
+                    return {'primary-ip':this._primaryInfo.PrivateIpAddress, 'config-sync-port':fadcfgsyncport};
+                } else {
+                    return {'primary-ip':this._primaryInfo.PrivateIpAddress, 'config-sync-port':10443};
+                }
+            }
+            return {};
+        }
     }
 
-    async handleGetConfigCallback(isPrimary, statusSuccess) {
-        let lifecycleItem, instanceProtected = false;
-        lifecycleItem = await this.completeGetConfigLifecycleAction(
+    async handleGetConfigCallback(isPrimary, statusSuccess, primary_record) {
+        await this.completeGetConfigLifecycleAction(
                 this._selfInstance.InstanceId, statusSuccess) ||
                 new AutoScaleCore.LifecycleItem(this._selfInstance.InstanceId, {},
                     AutoScaleCore.LifecycleItem.ACTION_NAME_GET_CONFIG);
         
         if (isPrimary) {
-            /*
-            try {
-                // then protect it from scaling in
-                 instanceProtected =
-                         await this.platform.protectInstanceFromScaleIn(
-                             process.env.AUTO_SCALING_GROUP_NAME, lifecycleItem);
-                logger.info(`Instance (id: ${lifecycleItem.instanceId}) scaling-in` +
-                    ` protection is on: ${instanceProtected}`);
-            } catch (ex) {
-                logger.warn('Unable to protect instance from scale in:', ex);
-            }
-            */
-            // update primary election from 'pending' to 'done'
-            await this.platform.finalizePrimaryElection();
+            await this.platform.finalizePrimaryElection(this._selfInstance.InstanceId, primary_record);
         }
-        logger.info('called handleGetConfigCallback');
+        logger.info(`${this._selfInstance.InstanceId} called handleGetConfigCallback`);
         return {};
     }
 
@@ -1484,15 +1588,18 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
             this._primaryHealthCheck = null;
             this._primaryRecord = null;
         }
-        if (!this._primaryInfo && (!filters || filters && filters.primaryInfo)) {
-            this._primaryInfo = await this.getPrimaryInfo();
+        
+        if (!this._primaryRecord && (!filters || filters && filters.primaryRecord)) {
+            this._primaryRecord = await this.platform.getElectedPrimary();
         }
         
-          
-        if (!this._primaryHealthCheck && (!filters || filters && filters.primaryHealthCheck)) {
-            if (!this._primaryInfo) {
-                this._primaryInfo = await this.getPrimaryInfo();
+        if (!this._primaryInfo && (!filters || filters && filters.primaryInfo)) {
+            if (this._primaryRecord) {
+                this._primaryInfo = await this.getPrimaryInfo(this._primaryRecord.instanceId, this._primaryRecord.ip);
             }
+        }
+
+        if (!this._primaryHealthCheck && (!filters || filters && filters.primaryHealthCheck)) {
             if (this._primaryInfo) {
                 // TODO: primary health check should not depend on the current hb
                 this._primaryHealthCheck = await this.platform.getInstanceHealthCheck({
@@ -1500,12 +1607,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 });
             }
         }
-        
-        
-        if (!this._primaryRecord && (!filters || filters && filters.primaryRecord)) {
-            this._primaryRecord = await this.platform.getElectedPrimary();
-        }
-        
+
         return {
             primaryInfo: this._primaryInfo,
             primaryHealthCheck: this._primaryHealthCheck,
@@ -1586,8 +1688,10 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                         return false;
                     }
                 } else {
-                    // primary cannot be elected but I cannot be the next elected primary either
-                    // if not wait for the primary election to complete, let me become headless
+                    //the primary ec2 instance is not there. The primary record in db is outdated
+                    //remove the primary record in db to start a primary election.
+                    logger.warn('The primary ec2 instance is not there, remove the primary record');
+                    this.platform.removePrimaryRecord();
                     return false;
                 }
             },
@@ -1601,7 +1705,7 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
         try {
            primaryInfo = await AutoScaleCore.waitFor(
            promiseEmitter, validator, 5000, counter);
-           logger.info(`${this._selfInstance.InstanceId}: Elected primary done`);
+           logger.info(`${this._selfInstance.InstanceId}: Check primary election done`);
         } catch (error) {
             let message = '';
             if (error instanceof Error) {
@@ -1634,7 +1738,8 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
 
             this._step = 'handler:getConfig:getSecondaryConfig';
             config = this.getSecondaryConfig(primaryInfo.PrivateIpAddress,
-                await this.platform.getCallbackEndpointUrl(), process.env.FORTIADC_SYNC_INTERFACE, process.env.FORTIADC_PSKSECRET, process.env.FORTIADC_ADMIN_PORT);
+                await this.platform.getCallbackEndpointUrl(), process.env.FORTIADC_SYNC_INTERFACE,
+                process.env.FORTIADC_ADMIN_PORT, await this.platform.addConfigSyncPort(-1));
            
             logger.info('called handleGetConfig: returning secondary role config' +
                 `(primary-ip: ${primaryInfo.PrivateIpAddress}):\n ${config}`);
@@ -1718,6 +1823,57 @@ class AwsAutoscaleHandler extends AutoScaleCore.AutoscaleHandler {
                 logger.info('called findFortiADCStatus: unexpected body content format ' +
             `(${request.body})`);
                 return null;
+            }
+        }
+    }
+    async findFortiADCCfgSyncPort(request, is_primary = false) {
+        if (request.body && request.body !== '') {
+            let cfgsyncport = 10443;
+            try {
+                let jsonBodyObject = JSON.parse(request.body);
+                if (jsonBodyObject.cfgsyncport && is_primary) {
+                    logger.info('called findFortiADCCfgSyncPort: ' +
+                    `config sync port ${jsonBodyObject.cfgsyncport} found`);
+                    // add config sync port into configset
+                    cfgsyncport = await this.platform.addConfigSyncPort(jsonBodyObject.cfgsyncport);
+                } else {
+                    logger.info('called findFortiADCCfgSyncPort: cfgsyncport not found or is not primary node');
+                    //get config sync port from configset
+                    cfgsyncport = await this.platform.addConfigSyncPort(-1);
+                }
+                //logger.info(`cfgsyncport: ${cfgsyncport}`);
+                return cfgsyncport;
+            } catch (ex) {
+                logger.info('called findFortiADCCfgSyncPort: unexpected body content format ' +
+            `(${request.body})`);
+                return null;
+            }
+        }
+    }
+    async checkFortiADCImageVersion(request, is_primary = false) {
+        if (request.body && request.body !== '') {
+            let image = "";
+            try {
+                let jsonBodyObject = JSON.parse(request.body);
+                if (jsonBodyObject.image) {
+                    logger.info('called checkFortiADCImageVersion: image ' +
+                    `${jsonBodyObject.image} found`);
+                    // add config sync port into configset
+                    image = await this.platform.addFortiADCImageVersion(jsonBodyObject.image, is_primary);
+                    if (image != jsonBodyObject.image ) {
+                        logger.warn('called checkFortiADCImageVersion: image version is incompatible');
+                        return false;
+                    }
+                } else {
+                    logger.info('called checkFortiADCImageVersion: image version not found');
+                    return false;
+                }
+                //logger.info(`cfgsyncport: ${cfgsyncport}`);
+                return true;
+            } catch (ex) {
+                logger.info('called checkFortiADCImageVersion: unexpected body content format ' +
+            `(${request.body})`);
+                return false;
             }
         }
     }
