@@ -17,7 +17,7 @@
         },
         "OnDemandAMIName": {
             "Type": "String",
-            "Default": "720606"
+            "Default": ""
         },
         "BYOLNeeded": {
             "Type": "String",
