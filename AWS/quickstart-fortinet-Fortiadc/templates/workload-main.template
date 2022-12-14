@@ -129,10 +129,27 @@
         },
         "FortiadcElbTgHealthyThreshold": {
             "Type": "Number",
-            "Default": 3,
-            "MinValue": 3,
-            "ConstraintDescription": "must be a valid number not less than 3.",
-            "Description": "The number of consecutive health check failures required before considering a Fortiadc instance unhealthy. Minimum is 3."
+            "Default": 2,
+            "MinValue": 2,
+            "MaxValue": 10,
+            "ConstraintDescription": "must be a valid number not less than 2.",
+            "Description": "The number of consecutive health check failures required before considering a Fortiadc instance unhealthy. Minimum is 2."
+        },
+        "FortiadcElbTgHCTimeout": {
+            "Type": "Number",
+            "Default": 2,
+            "MinValue": 2,
+            "MaxValue": 120,
+            "ConstraintDescription": "must be a valid number not less than 2.",
+            "Description": "The amount of time in seconds, during which no response from a Fortiadc instance means a failed health check. Minimum is 2."
+        },
+        "FortiadcElbTgHCInterval": {
+            "Type": "Number",
+            "Default": 5,
+            "MinValue": 5,
+            "MaxValue": 300,
+            "ConstraintDescription": "must be a valid number not less than 5.",
+            "Description": "The approximate amount of time in seconds between health checks of an individual Fortiadc instance. Minimum is 5."
         },
         "BalanceWebTrafficOverPort": {
             "Type": "Number",
@@ -332,6 +349,12 @@
                     "FortiadcElbTgHealthyThreshold": {
                         "Ref": "FortiadcElbTgHealthyThreshold"
                     },
+                    "FortiadcElbTgHCTimeout": {
+                        "Ref": "FortiadcElbTgHCTimeout"
+                    },
+                    "FortiadcElbTgHCInterval": {
+                        "Ref": "FortiadcElbTgHCInterval"
+                    },
                     "BalanceWebTrafficOverPort": {
                         "Ref": "BalanceWebTrafficOverPort"
                     },
@@ -456,7 +479,7 @@
                 },
                 {
                     "Label": {
-                        "default": "Fortiadc auto-scaling group configuration"
+                        "default": "FortiADC auto-scaling group configuration"
                     },
                     "Parameters": [
                         "ExpireLifecycleEntry",
@@ -467,7 +490,9 @@
                         "FortiadcAsgCooldown",
                         "FortiadcAsgScaleOutThreshold",
                         "FortiadcAsgScaleInThreshold",
-                        "FortiadcElbTgHealthyThreshold"
+                        "FortiadcElbTgHealthyThreshold",
+						"FortiadcElbTgHCTimeout",
+						"FortiadcElbTgHCInterval"
                     ]
                 },
                 {
@@ -543,6 +568,12 @@
                 "FortiadcElbTgHealthyThreshold": {
                     "default": "Healthy threshold"
                 },
+				"FortiadcElbTgHCTimeout": {
+					"default": "Health Check Timeout"
+				},
+				"FortiadcElbTgHCInterval": {
+					"default": "Health Check Interval"
+				},
                 "BalanceWebTrafficOverPort": {
                     "default": "Web service traffic port"
                 },
