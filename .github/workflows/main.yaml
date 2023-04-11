@@ -12,7 +12,7 @@ jobs:
         id: get_version
         run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
       - name: create release package
-        run: tar zcvf ./fortiadc-autoscale.tar.gz ./*
+        run: cd ./AWS/ && tar -zcvf ../fortiadc-autoscale.tar.gz . && cd -
       - name: upload release package
         uses: svenstaro/upload-release-action@v2
         with:
