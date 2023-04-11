@@ -1,0 +1,29 @@
+name: fortiadc-autoscale
+on:
+  push:
+    tags:
+      - '*'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [ '12' ]
+    name: Node ${{ matrix.node }} sample
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install
+      - run: npm run build
+      - name: create-fortiadc-autoscale-release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{secrets.GITHUB_TOKEN}}
+          file: ./dist/*
+          tag: ${{github.ref}}
+          overwrite: true
+          body: "FortiADC Autoscale Release"
+          file_glob: true
