@@ -49,23 +49,36 @@
             "ConstraintDescription": "must be a valid CIDR block format.",
             "Description": "The CIDR block for the public (DMZ) subnet located in Availability Zone 2."
         },
+        "FortiadcPAYGAMIType": {
+            "Type": "String",
+            "Default": "FAD-PAYG-1gbps",
+            "AllowedValues": [
+                "FAD-PAYG-100mbps",
+                "FAD-PAYG-500mbps",
+                "FAD-PAYG-1gbps",
+                "FAD-PAYG-5gbps",
+                "FAD-PAYG-10gbps"
+            ],
+            "ConstraintDescription": "must be a valid FortiADC PAYG image type.",
+            "Description": "FortiADC PAYG image type."
+        },
         "FortiadcInstanceType": {
            "Type": "String",
-            "Default": "c5.xlarge",
+            "Default": "c5.2xlarge",
             "AllowedValues": [
-                "t3.large",
-                "t3.xlarge",
-                "t3.2xlarge",
                 "m5.large",
                 "m5.xlarge",
                 "m5.2xlarge",
+                "m5.4xlarge",
+                "m5.8xlarge",
+                "c5.large",
                 "c5.xlarge",
                 "c5.2xlarge",
                 "c5.4xlarge",
                 "c5.9xlarge"
             ],
             "ConstraintDescription": "must be a valid EC2 instance type.",
-            "Description": "Instance type to launch as Fortiadc On-Demand instances. There are compute-optimized instances such as t3 and c5 available with different vCPU sizes and bandwidths. For more information about instance types, see https://aws.amazon.com/ec2/instance-types/"
+            "Description": "EC2 Instance type to launch as Fortiadc On-Demand instances. FAD-PAYG-100mbps, FAD-PAYG-500mbps, and FAD-PAYG-1gbps support EC2 Instance type m5.large, m5.xlarge, m5.2xlarge, c5.large, c5.xlarge and c5.2xlarge; FAD-PAYG-5gbps and FAD-PAYG-10gbps support EC2 Instance type m5.2xlarge, m5.4xlarge, m5.8xlarge, c5.2xlarge, c5.4xlarge and c5.9xlarge. For more information about instance types, see https://aws.amazon.com/ec2/instance-types/."
         },
         "ExpireLifecycleEntry": {
             "Type": "Number",
@@ -159,23 +172,23 @@
             "ConstraintDescription": "must be a valid port number between 1 and 65535.",
             "Description": "Receive HTTPS web service traffic through this port and load balance traffic to this port of FortiADC. Minimum is 1. Maximum is 65535."
         },
-		"ElasticIPOption": {
-			"Type": "String",
-			"Default": "add a new Elastic IP",
-			"AllowedValues": [
-				"add a new Elastic IP",
-			"use an Elastic IP specified below"
-			],
-			"ConstraintDescription": "must choose from the provided options.",
-			"Description": "Create new or use existing Elastic IP to manage FortiADC. Since autoscaling may create many instances, you need to log in to primary FortiADC on this IP address to manage all FortiADC instances. You can fill in the existing Elastic IP below, or let us create a new one for you. The default action is to use an existing Elastic IP."
-		},
-		"FortiadcElasticIP": {
-			"Type": "String",
-			"Default": "fadcASG-EIP",
-			"Description": "Elastic IP address or name, through which you can manage primary FortiADC. If you use an existing Elastic IP, fill it's IP address in here. If you create a new Elastic IP, give it a name so that you can find it easily in the AWS console.",
-			"AllowedPattern": "^.+$",
-			"ConstraintDescription": "must be a valid IP address format or a valid tag value."
-		},
+        "ElasticIPOption": {
+            "Type": "String",
+            "Default": "add a new Elastic IP",
+            "AllowedValues": [
+                "add a new Elastic IP",
+            "use an Elastic IP specified below"
+            ],
+            "ConstraintDescription": "must choose from the provided options.",
+            "Description": "Create new or use existing Elastic IP to manage FortiADC. Since autoscaling may create many instances, you need to log in to primary FortiADC on this IP address to manage all FortiADC instances. You can fill in the existing Elastic IP below, or let us create a new one for you. The default action is to use an existing Elastic IP."
+        },
+        "FortiadcElasticIP": {
+            "Type": "String",
+            "Default": "fadcASG-EIP",
+            "Description": "Elastic IP address or name, through which you can manage primary FortiADC. If you use an existing Elastic IP, fill it's IP address in here. If you create a new Elastic IP, give it a name so that you can find it easily in the AWS console.",
+            "AllowedPattern": "^.+$",
+            "ConstraintDescription": "must be a valid IP address format or a valid tag value."
+        },
         "FortiadcAdminPort": {
             "Type": "Number",
             "Default": 8443,
@@ -319,6 +332,9 @@
                             "Outputs.PublicSubnet2"
                         ]
                     },
+                    "FortiadcPAYGAMIType": {
+                        "Ref": "FortiadcPAYGAMIType"
+                    },
                     "FortiadcInstanceType": {
                         "Ref": "FortiadcInstanceType"
                     },
@@ -367,12 +383,12 @@
                     "KeyPairName": {
                         "Ref": "KeyPairName"
                     },
-					"ElasticIPOption": {
+                    "ElasticIPOption": {
                         "Ref": "ElasticIPOption"
-					},
-					"FortiadcElasticIP": {
+                    },
+                    "FortiadcElasticIP": {
                         "Ref": "FortiadcElasticIP"
-					},
+                    },
                     "ResourceTagPrefix": {
                         "Fn::Join": [
                             "-",
@@ -469,11 +485,12 @@
                     },
                     "Parameters": [
                         "CustomIdentifier",
+                        "FortiadcPAYGAMIType",
                         "FortiadcInstanceType",
                         "FortiadcAdminPort",
                         "FortiadcAdminCidr",
                         "KeyPairName",
-						"ElasticIPOption",
+                        "ElasticIPOption",
                         "FortiadcElasticIP"
                     ]
                 },
@@ -491,8 +508,8 @@
                         "FortiadcAsgScaleOutThreshold",
                         "FortiadcAsgScaleInThreshold",
                         "FortiadcElbTgHealthyThreshold",
-						"FortiadcElbTgHCTimeout",
-						"FortiadcElbTgHCInterval"
+                        "FortiadcElbTgHCTimeout",
+                        "FortiadcElbTgHCInterval"
                     ]
                 },
                 {
@@ -529,8 +546,11 @@
                 "PublicSubnet2CIDR": {
                     "default": "Public subnet 2 CIDR"
                 },
+                "FortiadcPAYGAMIType": {
+                    "default": "Fortiadc PAYG AMI Type"
+                },
                 "FortiadcInstanceType": {
-                    "default": "Instance type"
+                    "default": "EC2 Instance type"
                 },
                 "LambdaDeploymentMethod": {
                     "default": "Deployment method"
@@ -568,12 +588,12 @@
                 "FortiadcElbTgHealthyThreshold": {
                     "default": "Healthy threshold"
                 },
-				"FortiadcElbTgHCTimeout": {
-					"default": "Health Check Timeout"
-				},
-				"FortiadcElbTgHCInterval": {
-					"default": "Health Check Interval"
-				},
+                "FortiadcElbTgHCTimeout": {
+                    "default": "Health Check Timeout"
+                },
+                "FortiadcElbTgHCInterval": {
+                    "default": "Health Check Interval"
+                },
                 "BalanceWebTrafficOverPort": {
                     "default": "Web service traffic port"
                 },
@@ -586,12 +606,12 @@
                 "KeyPairName": {
                     "default": "Key pair name"
                 },
-				"ElasticIPOption": {
-					"default": "FortiADC Elastic IP option"
-				},
-				"FortiadcElasticIP": {
-					"default": "FortiADC Elastic IP or Name"
-				}
+                "ElasticIPOption": {
+                    "default": "FortiADC Elastic IP option"
+                },
+                "FortiadcElasticIP": {
+                    "default": "FortiADC Elastic IP or Name"
+                }
             }
         }
     },

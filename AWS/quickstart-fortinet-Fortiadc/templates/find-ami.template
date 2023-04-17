@@ -19,6 +19,10 @@
             "Type": "String",
             "Default": ""
         },
+        "OnDemandAMIType": {
+            "Type": "String",
+            "Default": "FAD-PAYG-1gbps"
+        },
         "BYOLNeeded": {
             "Type": "String",
             "Default": "y"
@@ -43,6 +47,9 @@
                 },
                 "OnDemandAMIName": {
                     "Ref": "OnDemandAMIName"
+                },
+                "OnDemandAMIType": {
+                    "Ref": "OnDemandAMIType"
                 }
             }
         },
